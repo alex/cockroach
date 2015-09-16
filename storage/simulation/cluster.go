@@ -19,6 +19,7 @@ package main
 
 import (
 	"bytes"
+	"fmt"
 	"math/rand"
 	"sort"
 
@@ -45,9 +46,11 @@ type Cluster struct {
 	storeGossiper *gossiputil.StoreGossiper
 	nodes         map[proto.NodeID]*Node
 	stores        map[proto.StoreID]*Store
+	storeIDs      []proto.StoreID // sorted
 	ranges        map[proto.RangeID]*Range
 	rand          *rand.Rand
 	seed          int64
+	epoch         int
 }
 
 // createCluster generates a new cluster using the provided stopper and the
@@ -97,6 +100,17 @@ func (c *Cluster) addStore(nodeID proto.NodeID) *Store {
 	s := n.addNewStore()
 	storeID, _ := s.getIDs()
 	c.stores[storeID] = s
+
+	// Save a sorted array of store IDs to make printing simpler.
+	var storeIDs []int
+	for storeID := range c.stores {
+		storeIDs = append(storeIDs, int(storeID))
+	}
+	sort.Ints(storeIDs)
+	c.storeIDs = []proto.StoreID{}
+	for _, storeID := range storeIDs {
+		c.storeIDs = append(c.storeIDs, proto.StoreID(storeID))
+	}
 	return s
 }
 
@@ -104,25 +118,44 @@ func (c *Cluster) addStore(nodeID proto.NodeID) *Store {
 // store.
 func (c *Cluster) addRange() *Range {
 	rangeID := proto.RangeID(len(c.ranges))
-	newRng := newRange(rangeID)
+	newRng := newRange(rangeID, c.allocator)
 	c.ranges[rangeID] = newRng
 	return newRng
 }
 
+// splitRangeRandom splits a random range from within the cluster.
 func (c *Cluster) splitRangeRandom() {
 	rangeID := proto.RangeID(c.rand.Int63n(int64(len(c.ranges))))
 	c.splitRange(rangeID)
 }
 
+// splitRangeLast splits the last added range in the cluster.
 func (c *Cluster) splitRangeLast() {
 	rangeID := proto.RangeID(len(c.ranges) - 1)
 	c.splitRange(rangeID)
 }
 
+// splitRange "splits" a range. This split creates a new range with new
+// replicas on the same stores as the passed in range.
 func (c *Cluster) splitRange(rangeID proto.RangeID) {
 	newRange := c.addRange()
 	originalRange := c.ranges[rangeID]
 	newRange.splitRange(originalRange)
+}
+
+// runEpoch prepares all ...
+func (c *Cluster) runEpoch() {
+	c.epoch++
+
+	// Determine next operation for all ranges.
+	for _, r := range c.ranges {
+		r.prepareActions()
+	}
+
+	// Execute the determined operations.
+
+	// Output the update.
+	fmt.Println(c.StringEpoch())
 }
 
 // String prints out the current status of the cluster.
@@ -148,14 +181,8 @@ func (c *Cluster) String() string {
 		buf.WriteString("\n")
 	}
 
-	var storeIDs []int
-	for storeID := range c.stores {
-		storeIDs = append(storeIDs, int(storeID))
-	}
-	sort.Ints(storeIDs)
-
 	buf.WriteString("Store Info:\n")
-	for _, storeID := range storeIDs {
+	for _, storeID := range c.storeIDs {
 		s := c.stores[proto.StoreID(storeID)]
 		buf.WriteString(s.String(storesRangeCounts[proto.StoreID(storeID)]))
 		buf.WriteString("\n")
@@ -174,5 +201,38 @@ func (c *Cluster) String() string {
 		buf.WriteString("\n")
 	}
 
+	return buf.String()
+}
+
+// StringEpochHeader creates the string header for epoch outputs based on all
+// of the current stores.
+func (c *Cluster) StringEpochHeader() string {
+	var buf bytes.Buffer
+	buf.WriteString("Store:\t")
+	for _, storeID := range c.storeIDs {
+		buf.WriteString(fmt.Sprintf("%d\t", storeID))
+	}
+	return buf.String()
+}
+
+// StringEpoch create a string with the current free capacity for all stores.
+func (c *Cluster) StringEpoch() string {
+	var buf bytes.Buffer
+	buf.WriteString(fmt.Sprintf("%d:\t", c.epoch))
+
+	// TODO(bram): Consider saving this map in the cluster instead of
+	// recalculating it each time.
+	storesRangeCounts := make(map[proto.StoreID]int)
+	for _, r := range c.ranges {
+		for _, storeID := range r.getStoreIDs() {
+			storesRangeCounts[storeID]++
+		}
+	}
+
+	for _, storeID := range c.storeIDs {
+		store := c.stores[proto.StoreID(storeID)]
+		capacity := store.getCapacity(storesRangeCounts[proto.StoreID(storeID)])
+		buf.WriteString(fmt.Sprintf("%.0f%%\t", float64(capacity.Available)/float64(capacity.Capacity)*100))
+	}
 	return buf.String()
 }

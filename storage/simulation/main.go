@@ -37,5 +37,10 @@ func main() {
 		c.splitRangeRandom()
 	}
 
-	fmt.Printf("Cluster Info:\n%s\n", c)
+	fmt.Println(c.StringEpochHeader())
+
+	for i := 0; i < 100; i++ {
+		c.runEpoch()
+	}
+
 }

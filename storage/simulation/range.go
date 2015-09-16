@@ -23,27 +23,38 @@ import (
 	"sort"
 	"sync"
 
+	"github.com/cockroachdb/cockroach/config"
 	"github.com/cockroachdb/cockroach/proto"
+	"github.com/cockroachdb/cockroach/storage"
 )
 
-const defaultReplicationFactor = 3
+// nextAction hold the results from calling the allocator as to what the range
+// should do if it was part of the replicate queue.
+type nextAction struct {
+	action    storage.AllocatorAction
+	priority  float64
+	rebalance bool
+}
 
 // Range is a simulated cockroach range.
 type Range struct {
 	sync.RWMutex
-	factor int // replication factor
-	desc   proto.RangeDescriptor
-	stores map[proto.StoreID]*Store
+	zone        config.ZoneConfig
+	desc        proto.RangeDescriptor
+	stores      map[proto.StoreID]*Store
+	allocator   storage.Allocator
+	nextActions map[proto.StoreID]nextAction
 }
 
 // newRange returns a new range with the given rangeID.
-func newRange(rangeID proto.RangeID) *Range {
+func newRange(rangeID proto.RangeID, allocator storage.Allocator) *Range {
 	return &Range{
 		desc: proto.RangeDescriptor{
 			RangeID: rangeID,
 		},
-		factor: defaultReplicationFactor,
-		stores: make(map[proto.StoreID]*Store),
+		zone:      *config.DefaultZoneConfig,
+		stores:    make(map[proto.StoreID]*Store),
+		allocator: allocator,
 	}
 }
 
@@ -59,18 +70,18 @@ func (r *Range) getDesc() proto.RangeDescriptor {
 	return r.desc
 }
 
-// getFactor returns the range's replication factor.
-func (r *Range) getFactor() int {
+// getFactor returns the range's zone config.
+func (r *Range) getZoneConfig() config.ZoneConfig {
 	r.RLock()
 	defer r.RUnlock()
-	return r.factor
+	return r.zone
 }
 
 // setFactor sets the range's replication factor.
-func (r *Range) setFactor(factor int) {
+func (r *Range) setZoneConfig(zone config.ZoneConfig) {
 	r.Lock()
 	defer r.Unlock()
-	r.factor = factor
+	r.zone = zone
 }
 
 // attachRangeToStore adds a new replica on the passed in store. It adds it to
@@ -116,8 +127,27 @@ func (r *Range) splitRange(originalRange *Range) {
 	stores := originalRange.getStores()
 	r.Lock()
 	defer r.Unlock()
-	r.desc.Replicas = desc.Replicas
+	r.desc.Replicas = append([]proto.Replica(nil), desc.Replicas...)
 	r.stores = stores
+}
+
+// prepareActions *********
+func (r *Range) prepareActions() {
+	r.Lock()
+	defer r.Unlock()
+	for storeID := range r.stores {
+		action, priority := r.allocator.ComputeAction(r.zone, &r.desc)
+		var rebalance bool
+		if action == storage.AANoop {
+			rebalance = r.allocator.ShouldRebalance(storeID)
+			priority = 0
+		}
+		r.nextActions[storeID] = nextAction{
+			action:    action,
+			priority:  priority,
+			rebalance: rebalance,
+		}
+	}
 }
 
 // String returns a human readable string with details about the range.
@@ -132,7 +162,7 @@ func (r *Range) String() string {
 	sort.Ints(storeIDs)
 
 	var buf bytes.Buffer
-	fmt.Fprintf(&buf, "Range:%d, Factor:%d, Stores:[", r.desc.RangeID, r.factor)
+	fmt.Fprintf(&buf, "Range:%d, Factor:%d, Stores:[", r.desc.RangeID, len(r.zone.ReplicaAttrs))
 
 	first := true
 	for _, storeID := range storeIDs {
