@@ -83,14 +83,14 @@ func createCluster(stopper *stop.Stopper, nodeCount int) *Cluster {
 
 	// Add a single range and add to this first node's first store.
 	firstRange := c.addRange()
-	firstRange.attachRangeToStore(c.stores[proto.StoreID(0)])
+	firstRange.addReplica(c.stores[proto.StoreID(0)])
 	return c
 }
 
 // addNewNodeWithStore adds new node with a single store.
 func (c *Cluster) addNewNodeWithStore() {
 	nodeID := proto.NodeID(len(c.nodes))
-	c.nodes[nodeID] = newNode(nodeID)
+	c.nodes[nodeID] = newNode(nodeID, c.gossip)
 	c.addStore(nodeID)
 }
 
@@ -101,7 +101,8 @@ func (c *Cluster) addStore(nodeID proto.NodeID) *Store {
 	storeID, _ := s.getIDs()
 	c.stores[storeID] = s
 
-	// Save a sorted array of store IDs to make printing simpler.
+	// Save a sorted array of store IDs since to avoid having to calculate them
+	// multiple times.
 	var storeIDs []int
 	for storeID := range c.stores {
 		storeIDs = append(storeIDs, int(storeID))
@@ -136,16 +137,26 @@ func (c *Cluster) splitRangeLast() {
 }
 
 // splitRange "splits" a range. This split creates a new range with new
-// replicas on the same stores as the passed in range.
+// replicas on the same stores as the passed in range. The new range has the
+// same zone config as the original range.
 func (c *Cluster) splitRange(rangeID proto.RangeID) {
 	newRange := c.addRange()
 	originalRange := c.ranges[rangeID]
 	newRange.splitRange(originalRange)
 }
 
-// runEpoch prepares all ...
+// runEpoch steps through a single instance of the simulator. Each epoch
+// performs the following steps.
+// 1) The status of every store is gossiped so the store pool is up to date.
+// 2) Each replica on every range calls the allocator to determine if there are
+//    any actions required.
+// 3) The replica on each range with the highest priority executes it's action.
+// 4) The current status of the cluster is output.
 func (c *Cluster) runEpoch() {
 	c.epoch++
+
+	// Gossip all the store updates.
+	c.gossipStores()
 
 	// Determine next operation for all ranges.
 	for _, r := range c.ranges {
@@ -153,13 +164,56 @@ func (c *Cluster) runEpoch() {
 	}
 
 	// Execute the determined operations.
+	c.performActions()
 
 	// Output the update.
 	fmt.Println(c.StringEpoch())
 }
 
+// gossipStores gossips all the most recent status for all stores.
+func (c *Cluster) gossipStores() {
+	storesRangeCounts := make(map[proto.StoreID]int)
+	for _, r := range c.ranges {
+		for _, storeID := range r.getStoreIDs() {
+			storesRangeCounts[storeID]++
+		}
+	}
+
+	c.storeGossiper.GossipWithFunction(c.storeIDs, func() {
+		for storeID, store := range c.stores {
+			store.gossipStore(storesRangeCounts[storeID])
+		}
+	})
+}
+
+// performActions performs a single action, if required, for each range.
+func (c *Cluster) performActions() {
+	for rangeID, r := range c.ranges {
+		nextAction := r.getNextAction()
+		switch nextAction.action {
+		case storage.AAAdd:
+			newStoreID := r.getAllocateTarget()
+			r.addReplica(c.stores[newStoreID])
+		case storage.AARemoveDead:
+			// TODO(bram): implement this.
+			fmt.Printf("Range %d - Repair\n", rangeID)
+		case storage.AARemove:
+			// TODO(bram): implement this.
+			fmt.Printf("Range %d - Remove\n", rangeID)
+		case storage.AANoop:
+			if nextAction.rebalance {
+				// TODO(bram): implement this.
+				fmt.Printf("Range %d - Rebalance\n", rangeID)
+			}
+		}
+	}
+}
+
 // String prints out the current status of the cluster.
 func (c *Cluster) String() string {
+	var buf bytes.Buffer
+	buf.WriteString("Cluster Info:\n")
+	buf.WriteString(fmt.Sprintf("Seed - %d:\tEpoch - %d\n", c.seed, c.epoch))
 	storesRangeCounts := make(map[proto.StoreID]int)
 	for _, r := range c.ranges {
 		for _, storeID := range r.getStoreIDs() {
@@ -173,7 +227,6 @@ func (c *Cluster) String() string {
 	}
 	sort.Ints(nodeIDs)
 
-	var buf bytes.Buffer
 	buf.WriteString("Node Info:\n")
 	for _, nodeID := range nodeIDs {
 		n := c.nodes[proto.NodeID(nodeID)]

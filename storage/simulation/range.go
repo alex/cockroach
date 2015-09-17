@@ -52,9 +52,10 @@ func newRange(rangeID proto.RangeID, allocator storage.Allocator) *Range {
 		desc: proto.RangeDescriptor{
 			RangeID: rangeID,
 		},
-		zone:      *config.DefaultZoneConfig,
-		stores:    make(map[proto.StoreID]*Store),
-		allocator: allocator,
+		zone:        *config.DefaultZoneConfig,
+		stores:      make(map[proto.StoreID]*Store),
+		allocator:   allocator,
+		nextActions: make(map[proto.StoreID]nextAction),
 	}
 }
 
@@ -84,9 +85,9 @@ func (r *Range) setZoneConfig(zone config.ZoneConfig) {
 	r.zone = zone
 }
 
-// attachRangeToStore adds a new replica on the passed in store. It adds it to
+// addReplica adds a new replica on the passed in store. It adds it to
 // both the range descriptor and the store map.
-func (r *Range) attachRangeToStore(s *Store) {
+func (r *Range) addReplica(s *Store) {
 	r.Lock()
 	defer r.Unlock()
 	storeID, nodeID := s.getIDs()
@@ -131,10 +132,12 @@ func (r *Range) splitRange(originalRange *Range) {
 	r.stores = stores
 }
 
-// prepareActions *********
+// prepareActions walks through each replica and determines if any action is
+// required using the allocator.
 func (r *Range) prepareActions() {
 	r.Lock()
 	defer r.Unlock()
+	r.nextActions = make(map[proto.StoreID]nextAction)
 	for storeID := range r.stores {
 		action, priority := r.allocator.ComputeAction(r.zone, &r.desc)
 		var rebalance bool
@@ -148,6 +151,34 @@ func (r *Range) prepareActions() {
 			rebalance: rebalance,
 		}
 	}
+}
+
+// getNextAction returns a single action based on the priorities of the each
+// action stored in nextActions.
+func (r *Range) getNextAction() nextAction {
+	r.RLock()
+	defer r.RUnlock()
+	var topAction nextAction
+	// TODO(bram): This is random. Might want to make it deterministic for
+	// repeatability.
+	for _, nextAction := range r.nextActions {
+		if nextAction.priority > topAction.priority {
+			topAction = nextAction
+		}
+	}
+	return topAction
+}
+
+// getAllocateTarget calls allocateTarget for the range and returns the top
+// target store.
+func (r *Range) getAllocateTarget() proto.StoreID {
+	r.RLock()
+	defer r.RUnlock()
+	newStore, err := r.allocator.AllocateTarget(r.zone.ReplicaAttrs[0], r.desc.Replicas, true, nil)
+	if err != nil {
+		fmt.Printf("ERROR: %s\n", err)
+	}
+	return newStore.StoreID
 }
 
 // String returns a human readable string with details about the range.
