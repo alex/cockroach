@@ -21,6 +21,7 @@ import (
 	"fmt"
 
 	"github.com/cockroachdb/cockroach/client"
+	"github.com/cockroachdb/cockroach/config"
 	"github.com/cockroachdb/cockroach/sql/parser"
 	"github.com/cockroachdb/cockroach/util"
 )
@@ -28,9 +29,10 @@ import (
 // planner is the centerpiece of SQL statement execution combining session
 // state and database state with the logic for SQL execution.
 type planner struct {
-	txn     *client.Txn
-	session Session
-	user    string
+	txn          *client.Txn
+	session      Session
+	user         string
+	systemConfig *config.SystemConfig
 }
 
 // makePlan creates the query plan for a single SQL statement. The returned

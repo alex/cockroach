@@ -22,9 +22,12 @@ import (
 	"fmt"
 	"net/http"
 	"strconv"
+	"sync"
 	"time"
 
 	"github.com/cockroachdb/cockroach/client"
+	"github.com/cockroachdb/cockroach/config"
+	"github.com/cockroachdb/cockroach/gossip"
 	"github.com/cockroachdb/cockroach/proto"
 	"github.com/cockroachdb/cockroach/sql/driver"
 	"github.com/cockroachdb/cockroach/sql/parser"
@@ -39,18 +42,40 @@ var errTransactionInProgress = errors.New("there is already a transaction in pro
 // An Executor executes SQL statements.
 type Executor struct {
 	db client.DB
+
+	// System Config and mutex.
+	systemConfig   *config.SystemConfig
+	systemConfigMu sync.RWMutex
 }
 
-// NewExecutor creates an Executor.
-func NewExecutor(db client.DB) Executor {
-	return Executor{db}
+// NewExecutor creates an Executor and registers a callback on the
+// system config.
+func NewExecutor(db client.DB, gossip *gossip.Gossip) Executor {
+	exec := Executor{db: db}
+	gossip.RegisterSystemConfigCallback(exec.updateSystemConfig)
+	return exec
+}
+
+// updateSystemConfig is called whenever the system config gossip entry is updated.
+func (e *Executor) updateSystemConfig(cfg *config.SystemConfig) {
+	e.systemConfigMu.Lock()
+	defer e.systemConfigMu.Unlock()
+	e.systemConfig = cfg
+}
+
+// getSystemConfig returns a pointer to the latest system config. May be nil,
+// if the gossip callback has not run.
+func (e *Executor) getSystemConfig() *config.SystemConfig {
+	e.systemConfigMu.RLock()
+	defer e.systemConfigMu.RUnlock()
+	return e.systemConfig
 }
 
 // Execute the statement(s) in the given request and return a response.
 // On error, the returned integer is an HTTP error code.
 func (e Executor) Execute(args driver.Request) (driver.Response, int, error) {
 	// Pick up current session state.
-	planMaker := planner{user: args.GetUser()}
+	planMaker := planner{user: args.GetUser(), systemConfig: e.getSystemConfig()}
 	if err := gogoproto.Unmarshal(args.Session, &planMaker.session); err != nil {
 		return args.CreateReply(), http.StatusBadRequest, err
 	}
