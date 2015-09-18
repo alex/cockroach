@@ -75,18 +75,22 @@ func (p *planner) groupBy(n *parser.Select, s *scanNode) (*groupNode, error) {
 		columns: s.columns,
 		render:  s.render,
 		funcs:   funcs,
+		seen:    make([]map[string]struct{}, len(funcs)),
 	}
 
 	// Replace the render expressions in the scanNode with expressions that
 	// compute only the arguments to the aggregate expressions.
 	s.columns = make([]string, 0, len(funcs))
 	s.render = make([]parser.Expr, 0, len(funcs))
-	for _, f := range funcs {
+	for i, f := range funcs {
 		if len(f.val.Exprs) != 1 {
 			panic(fmt.Sprintf("%s has %d arguments (expected 1)", f.val.Name, len(f.val.Exprs)))
 		}
 		s.columns = append(s.columns, f.val.String())
 		s.render = append(s.render, f.val.Exprs[0])
+		if f.val.Distinct {
+			group.seen[i] = make(map[string]struct{})
+		}
 	}
 
 	return group, nil
@@ -99,6 +103,7 @@ type groupNode struct {
 	render    []parser.Expr
 	funcs     []*aggregateFunc
 	needGroup bool
+	seen      []map[string]struct{}
 	err       error
 }
 
@@ -115,7 +120,7 @@ func (n *groupNode) Values() parser.DTuple {
 }
 
 func (n *groupNode) Next() bool {
-	if !n.needGroup {
+	if !n.needGroup || n.err != nil {
 		return false
 	}
 	n.needGroup = false
@@ -125,6 +130,19 @@ func (n *groupNode) Next() bool {
 	for n.plan.Next() {
 		values := n.plan.Values()
 		for i, f := range n.funcs {
+			if f.val.Distinct {
+				encoded := make([]byte, 0, 100)
+				encoded, n.err = encodeTableKey(encoded, values[i])
+				if n.err != nil {
+					return false
+				}
+				e := string(encoded)
+				if _, ok := n.seen[i][e]; ok {
+					// skip
+					continue
+				}
+				n.seen[i][e] = struct{}{}
+			}
 			if n.err = f.impl.Add(values[i]); n.err != nil {
 				return false
 			}
