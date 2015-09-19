@@ -101,7 +101,7 @@ func (c *Cluster) addStore(nodeID proto.NodeID) *Store {
 	storeID, _ := s.getIDs()
 	c.stores[storeID] = s
 
-	// Save a sorted array of store IDs since to avoid having to calculate them
+	// Save a sorted array of store IDs to avoid having to calculate them
 	// multiple times.
 	c.storeIDs = append(c.storeIDs, storeID)
 	sort.Sort(proto.StoreIDSlice(c.storeIDs))
