@@ -140,7 +140,7 @@ func (c *Cluster) splitRange(rangeID proto.RangeID) {
 }
 
 // runEpoch steps through a single instance of the simulator. Each epoch
-// performs the following steps.
+// performs the following steps:
 // 1) The status of every store is gossiped so the store pool is up to date.
 // 2) Each replica on every range calls the allocator to determine if there are
 //    any actions required.
@@ -152,7 +152,7 @@ func (c *Cluster) runEpoch() {
 	// Gossip all the store updates.
 	c.gossipStores()
 
-	// Determine next operation for all ranges.
+	// Determine next operations for all ranges.
 	for _, r := range c.ranges {
 		r.prepareActions()
 	}
@@ -206,8 +206,7 @@ func (c *Cluster) performActions() {
 // String prints out the current status of the cluster.
 func (c *Cluster) String() string {
 	var buf bytes.Buffer
-	buf.WriteString("Cluster Info:\n")
-	buf.WriteString(fmt.Sprintf("Seed - %d:\tEpoch - %d\n", c.seed, c.epoch))
+	fmt.Fprintf(&buf, "Cluster Info:\nSeed - %d\tEpoch - %d\n", c.seed, c.epoch)
 	storesRangeCounts := make(map[proto.StoreID]int)
 	for _, r := range c.ranges {
 		for _, storeID := range r.getStoreIDs() {
@@ -257,7 +256,7 @@ func (c *Cluster) StringEpochHeader() string {
 	var buf bytes.Buffer
 	buf.WriteString("Store:\t")
 	for _, storeID := range c.storeIDs {
-		buf.WriteString(fmt.Sprintf("%d\t", storeID))
+		fmt.Fprintf(&buf, "%d\t", storeID)
 	}
 	return buf.String()
 }
@@ -265,7 +264,7 @@ func (c *Cluster) StringEpochHeader() string {
 // StringEpoch create a string with the current free capacity for all stores.
 func (c *Cluster) StringEpoch() string {
 	var buf bytes.Buffer
-	buf.WriteString(fmt.Sprintf("%d:\t", c.epoch))
+	fmt.Fprintf(&buf, "%d:\t", c.epoch)
 
 	// TODO(bram): Consider saving this map in the cluster instead of
 	// recalculating it each time.
@@ -279,7 +278,7 @@ func (c *Cluster) StringEpoch() string {
 	for _, storeID := range c.storeIDs {
 		store := c.stores[proto.StoreID(storeID)]
 		capacity := store.getCapacity(storesRangeCounts[proto.StoreID(storeID)])
-		buf.WriteString(fmt.Sprintf("%.0f%%\t", float64(capacity.Available)/float64(capacity.Capacity)*100))
+		fmt.Fprintf(&buf, "%.0f%%\t", float64(capacity.Available)/float64(capacity.Capacity)*100)
 	}
 	return buf.String()
 }
