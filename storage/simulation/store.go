@@ -95,14 +95,12 @@ func (s *Store) String(rangeCount int) string {
 }
 
 // GossipStore broadcasts the store on the gossip network.
-func (s *Store) gossipStore(rangeCount int) {
+func (s *Store) gossipStore(rangeCount int) error {
 	s.RLock()
 	defer s.RUnlock()
 	desc := s.getDesc(rangeCount)
 	// Unique gossip key per store.
 	gossipKey := gossip.MakeStoreKey(desc.StoreID)
 	// Gossip store descriptor.
-	if err := s.gossip.AddInfoProto(gossipKey, &desc, 0); err != nil {
-		fmt.Printf("Failed to gossip store: %s\n", err)
-	}
+	return s.gossip.AddInfoProto(gossipKey, &desc, 0)
 }

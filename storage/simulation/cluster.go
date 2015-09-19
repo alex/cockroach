@@ -175,7 +175,9 @@ func (c *Cluster) gossipStores() {
 
 	c.storeGossiper.GossipWithFunction(c.storeIDs, func() {
 		for storeID, store := range c.stores {
-			store.gossipStore(storesRangeCounts[storeID])
+			if err := store.gossipStore(storesRangeCounts[storeID]); err != nil {
+				fmt.Printf("Error gossiping store %d: %s\n", storeID, err)
+			}
 		}
 	})
 }
