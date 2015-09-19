@@ -103,15 +103,9 @@ func (c *Cluster) addStore(nodeID proto.NodeID) *Store {
 
 	// Save a sorted array of store IDs since to avoid having to calculate them
 	// multiple times.
-	var storeIDs []int
-	for storeID := range c.stores {
-		storeIDs = append(storeIDs, int(storeID))
-	}
-	sort.Ints(storeIDs)
-	c.storeIDs = []proto.StoreID{}
-	for _, storeID := range storeIDs {
-		c.storeIDs = append(c.storeIDs, proto.StoreID(storeID))
-	}
+	c.storeIDs = append(c.storeIDs, storeID)
+	sort.Sort(proto.StoreIDSlice(c.storeIDs))
+
 	return s
 }
 
@@ -221,11 +215,11 @@ func (c *Cluster) String() string {
 		}
 	}
 
-	var nodeIDs []int
+	var nodeIDs []proto.NodeID
 	for nodeID := range c.nodes {
-		nodeIDs = append(nodeIDs, int(nodeID))
+		nodeIDs = append(nodeIDs, nodeID)
 	}
-	sort.Ints(nodeIDs)
+	sort.Sort(proto.NodeIDSlice(nodeIDs))
 
 	buf.WriteString("Node Info:\n")
 	for _, nodeID := range nodeIDs {
@@ -241,11 +235,11 @@ func (c *Cluster) String() string {
 		buf.WriteString("\n")
 	}
 
-	var rangeIDs []int
+	var rangeIDs []proto.RangeID
 	for rangeID := range c.ranges {
-		rangeIDs = append(rangeIDs, int(rangeID))
+		rangeIDs = append(rangeIDs, rangeID)
 	}
-	sort.Ints(rangeIDs)
+	sort.Sort(proto.RangeIDSlice(rangeIDs))
 
 	buf.WriteString("Range Info:\n")
 	for _, rangeID := range rangeIDs {
